@@ -1,54 +1,85 @@
-const express = require('express');
-const {Pool, Client} = require('pg');
+const express = require("express");
+const { Pool } = require("pg");
+const multer = require("multer");
 const app = express();
-const port = 3000;
+const fs = require("fs");
+const parse = require("csv");
+const format = require("pg-format");
+const port = process.env.PORT || 5000;
 
-// const client = new Client({
-//     user: "niwkmjfkppddzt",
-//     host: "ec2-54-157-88-70.compute-1.amazonaws.com",
-//     database: "df5kk7bhepua7e",
-//     password: "9c7903713a043f5eb096558d9cb12a778c6e0c368f4ffe1d5f3ae5e202a73d9d",
-//     port: "5432",
-//     ssl: true
-//   });
-
-const client = new Client({
-        user: "postgres",
-        host: "localhost",
-        database: "postgres",
-        password: "a",
-        port: "5432"
-      });
-
-client.connect();
-
-app.get('/patients',(req,res) => {
-    res.send('Hi');
-})
-
-app.get('/getAllName',(req,res)=>{
-    let jsonObj = [{
-        name: 'yati',
-        lastname: 'Malik'
-    },{
-        name: 'Richa',
-        lastname: 'Chaudhary'
-    }];
-    res.send(jsonObj);
+app.use(function (req, res, next) {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept"
+  );
+  next();
 });
 
-app.post('/patients',(req,res) => {
-    client.query(
-        "INSERT INTO PATIENTS(NAME, AGE, GENDER, CONTACT)VALUES('Mary Ann', 20, 'Male', '8888888888')",
-        (err, resp) => {
-          client.end();
-          console.log(err,resp);
-        }
-      );
-      res.send('Hi');
-})
+app.use(express.json());
+
+var upload = multer();
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
 
 
-app.listen(port, ()=> {
-    console.log(process.env.DATABASE_URL);
-})
+app.post("/patientsData", upload.single("patientFile"), async (req, res) => {
+  try {
+    let data = req.file.buffer.toString("utf8");
+    let allRows = data.trim().split("\r\n");
+    let insertedRows = 0;
+    if (allRows.length > 0) {
+      let sqlRows = [];
+      for (let row of allRows) {
+        let patientData = row.split(",");
+        sqlRows.push(patientData);
+      }
+      if (sqlRows.length > 0) {
+        let sqlQuery = format(
+          "INSERT INTO PATIENTS (NAME, AGE, GENDER, CONTACT,CITY, STATE, COUNTRY) VALUES %L RETURNING PATIENT_ID",
+          sqlRows
+        );
+        const client = await pool.connect();
+        const result = await client.query(sqlQuery);
+        insertedRows = result && result.rowCount && result.rowCount > 0 ? result.rowCount : 0;
+      }
+    }
+    let status = insertedRows > 0 ? "1" : "0";
+    let responseData = { status, insertedRows };
+    res.send(responseData);
+  } catch (error) {
+      res.status(500).send({
+        message: 'Failed to upload the file'
+      });
+  }
+});
+
+
+app.get("/patients", async (req, res) => {
+  try {
+    const client = await pool.connect();
+    let sqlQuery;
+    if(req.query.patient_id){
+        sqlQuery = format("SELECT * FROM PATIENTS WHERE PATIENT_ID = %s", req.query.patient_id);
+    }
+    else{
+        sqlQuery = "SELECT * FROM PATIENTS";
+    }
+    const result = await client.query(sqlQuery);
+    res.send(result.rows);
+    client.release();
+  } catch (err) {
+    console.error(err);
+    res.send("Error " + err);
+  }
+});
+
+app.listen(port, () => {
+    console.log(port);
+});
+
